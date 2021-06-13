@@ -1,0 +1,94 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.33.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 27f55f1c1d0bacb15752e204c38241db96cf4ab7f07a270846f3eb4fdedd10e3
+
+name:           servant-myproj
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/ssipos90/servant-myproj#readme>
+homepage:       https://github.com/ssipos90/servant-myproj#readme
+bug-reports:    https://github.com/ssipos90/servant-myproj/issues
+author:         Sebastian Sipos
+maintainer:     sebastiansipos90@gmail.com
+copyright:      MIT
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/ssipos90/servant-myproj
+
+library
+  exposed-modules:
+      Lib
+  other-modules:
+      Paths_servant_myproj
+  hs-source-dirs:
+      src
+  default-extensions: LambdaCase OverloadedStrings
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , mtl
+    , postgresql-simple
+    , resource-pool
+    , servant
+    , servant-server
+    , wai
+    , warp
+  default-language: Haskell2010
+
+executable servant-myproj-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_servant_myproj
+  hs-source-dirs:
+      app
+  default-extensions: LambdaCase OverloadedStrings
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson
+    , base
+    , bytestring
+    , mtl
+    , postgresql-simple
+    , resource-pool
+    , servant
+    , servant-myproj
+    , servant-server
+    , wai
+    , warp
+  default-language: Haskell2010
+
+test-suite servant-myproj-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_servant_myproj
+  hs-source-dirs:
+      test
+  default-extensions: LambdaCase OverloadedStrings
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      aeson
+    , base
+    , bytestring
+    , hspec
+    , hspec-wai
+    , hspec-wai-json
+    , mtl
+    , postgresql-simple
+    , resource-pool
+    , servant
+    , servant-myproj
+    , servant-server
+    , wai
+    , warp
+  default-language: Haskell2010
