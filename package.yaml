@@ -27,6 +27,7 @@ dependencies:
 - resource-pool
 - servant
 - servant-server
+- transformers
 - wai
 - warp
 
@@ -34,6 +35,8 @@ default-extensions:
 - LambdaCase
 - OverloadedStrings
 
+ghc-options:
+  - -Wall -Werror
 
 library:
   source-dirs: src

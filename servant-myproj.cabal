@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 27f55f1c1d0bacb15752e204c38241db96cf4ab7f07a270846f3eb4fdedd10e3
+-- hash: 47720b947ec6ee236aa7112941d90cba37bce16b2d53bee095335730518f1b1d
 
 name:           servant-myproj
 version:        0.1.0.0
@@ -32,6 +32,7 @@ library
   hs-source-dirs:
       src
   default-extensions: LambdaCase OverloadedStrings
+  ghc-options: -Wall -Werror
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -41,6 +42,7 @@ library
     , resource-pool
     , servant
     , servant-server
+    , transformers
     , wai
     , warp
   default-language: Haskell2010
@@ -52,7 +54,7 @@ executable servant-myproj-exe
   hs-source-dirs:
       app
   default-extensions: LambdaCase OverloadedStrings
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -Wall -Werror -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
     , base
@@ -63,6 +65,7 @@ executable servant-myproj-exe
     , servant
     , servant-myproj
     , servant-server
+    , transformers
     , wai
     , warp
   default-language: Haskell2010
@@ -75,7 +78,7 @@ test-suite servant-myproj-test
   hs-source-dirs:
       test
   default-extensions: LambdaCase OverloadedStrings
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -Wall -Werror -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
     , base
@@ -89,6 +92,7 @@ test-suite servant-myproj-test
     , servant
     , servant-myproj
     , servant-server
+    , transformers
     , wai
     , warp
   default-language: Haskell2010
