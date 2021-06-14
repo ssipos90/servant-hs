@@ -1,123 +1,236 @@
-{-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE DeriveGeneric       #-}
-{-# LANGUAGE NamedFieldPuns      #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell     #-}
-{-# LANGUAGE TypeOperators       #-}
+{-# LANGUAGE DataKinds             #-}
+{-# LANGUAGE DeriveGeneric         #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns        #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE TypeOperators         #-}
 
 module Lib
     ( startApp
     ) where
-import           Control.Monad.Reader       (MonadIO (liftIO), ReaderT (..),
-                                             ask, runReaderT)
+import           Control.Monad.Reader             (MonadIO (liftIO),
+                                                   ReaderT (..), ask,
+                                                   runReaderT)
 
-import           Control.Exception          (bracket)
-import           Data.Aeson                 (FromJSON, defaultOptions)
-import           Data.Aeson.TH              (deriveJSON)
-import           Data.ByteString            (ByteString)
-import           Data.Pool                  (Pool (..), createPool,
-                                             withResource)
-import           Database.PostgreSQL.Simple (Connection, Only (Only), close,
-                                             connectPostgreSQL, execute_, query)
-import           GHC.Generics               (Generic (..))
+import           Data.Aeson                       (FromJSON, ToJSON (toJSON),
+                                                   defaultOptions,
+                                                   object, (.=))
+import Data.Aeson.TH(deriveJSON) 
+import qualified Data.ByteString                  as BS
+import           Data.Pool                        (Pool (..), createPool,
+                                                   withResource)
+import           Data.Text.Encoding               (decodeUtf8)
+import qualified Data.Text.IO                     as TIO
+import           Database.PostgreSQL.Simple.Time       (LocalTimestamp)
+import           Database.PostgreSQL.Simple       (ConnectInfo, Connection,
+                                                   Only (Only), close, connect,
+                                                   execute_, query)
+import           Database.PostgreSQL.Simple.Types (Query (..))
+import           GHC.Generics                     (Generic (..))
 import           Network.Wai
 import           Network.Wai.Handler.Warp
-import           Servant                    (Handler, HasServer (ServerT),
-                                             Proxy (..), ServerT, hoistServer,
-                                             serve)
-import           Servant.API                (Get, JSON, Post, ReqBody,
-                                             (:<|>) (..), (:>))
-
-type DBConnectionString = ByteString
+import           Servant                          (Capture, Handler,
+                                                   HasServer (ServerT),
+                                                   Proxy (..), ServerT,
+                                                   hoistServer, serve)
+import           Servant.API                      (Get, JSON, Post, ReqBody,
+                                                   (:<|>) (..), (:>))
 
 data User = User
   { userId        :: Int
   , userFirstName :: String
   , userLastName  :: String
-  } deriving (Eq, Show)
+  } deriving (Show)
+
+instance Eq User where
+  User {userId = userId1}== User {userId = userId2} = userId1 == userId2
 
 data CreateUser = CreateUser
   { firstName :: String
   , lastName  :: String
   } deriving (Show, Generic)
 
+data Transaction = Transaction
+  { transactionId :: Int
+  , fromUserId    :: Int
+  , toUserId      :: Int
+  , amount        :: Int
+  , date          :: String
+  } deriving (Show, Generic)
+
+data AddTransaction = AddTransaction
+  { fromUserId :: Int
+  , toUserId   :: Int
+  , amount     :: Int
+  } deriving (Generic)
+
 instance FromJSON CreateUser
 
-$(deriveJSON defaultOptions ''User)
+instance FromJSON AddTransaction
 
-type API = "users" :> (
-                        Get '[JSON] [User]
-                   :<|> ReqBody '[JSON] CreateUser :> Post '[JSON] User
-                      )
-                  --  :<|> Capture "userId" Int :> (
-                  --         Get '[JSON] User
-                  --    :<|> Put '[JSON] User
-                  --   )
-                  -- )
+instance ToJSON User where
+  toJSON User { userId, userFirstName, userLastName } =
+    object [ "userId" .= userId
+           , "firstName" .= userFirstName
+           , "lastName"  .= userLastName
+           ]
 
-initDB :: DBConnectionString -> IO ()
-initDB connstr = bracket (connectPostgreSQL connstr) close $ \conn -> do
-  _ <- execute_ conn
-    "CREATE TABLE IF NOT EXISTS messages (msg text not null)"
-  _ <- execute_ conn
-    "CREATE TABLE IF NOT EXISTS users \
+$(deriveJSON defaultOptions ''Transaction)
+
+createUsersQuery :: BS.ByteString
+createUsersQuery = "CREATE TABLE IF NOT EXISTS users\
     \( userId INT GENERATED BY DEFAULT AS IDENTITY\
     \, firstName VARCHAR NOT NULL\
     \, lastName VARCHAR NOT NULL\
+    \, PRIMARY KEY(userId)\
     \)"
+
+createTransactionsQuery :: BS.ByteString
+createTransactionsQuery = "CREATE TABLE IF NOT EXISTS transactions \
+    \( transactionId INT GENERATED BY DEFAULT AS IDENTITY\
+    \, fromUserId INT NOT NULL\
+    \, toUserId INT NOT NULL\
+    \, amount INT NOT NULL\
+    \, date TIMESTAMP NOT NULL DEFAULT now()\
+    \, PRIMARY KEY(transactionId)\
+    \, CONSTRAINT fk_from_user\
+      \ FOREIGN KEY(fromUserId)\
+        \ REFERENCES users(userId)\
+    \, CONSTRAINT fk_to_user\
+      \ FOREIGN KEY(toUserId)\
+        \ REFERENCES users(userId)\
+    \)"
+
+initDB :: Pool Connection -> IO ()
+initDB pool = withResource pool $ \conn -> do
+  _ <- TIO.putStrLn $ decodeUtf8 createUsersQuery
+  _ <- execute_ conn $ Query createUsersQuery
+  _ <- TIO.putStrLn $ decodeUtf8 createTransactionsQuery
+  _ <- execute_ conn $ Query createTransactionsQuery
   return ()
 
-data Database = Database {
+data AppConfig = AppConfig {
   pool :: Pool Connection
 }
 
-initConnectionPool :: DBConnectionString -> IO (Pool Connection)
-initConnectionPool connStr =
-  createPool (connectPostgreSQL connStr)
+initConnectionPool :: ConnectInfo  -> IO (Pool Connection)
+initConnectionPool connInfo =
+  createPool (connect connInfo)
              close
              2 -- stripes
              60 -- unused connections are kept open for a minute
              10 -- max. 10 connections open per stripe
 
-startApp :: IO ()
-startApp = do
-  let connStr = "host=localhost port=5432 dbname=servant user=postgres password=1q2w3e"
-  pool <- initConnectionPool connStr
-  initDB connStr
-  run 8080 (app $ Database { pool = pool })
+startApp :: ConnectInfo -> IO ()
+startApp connInfo = do
+  pool <- initConnectionPool connInfo
+  initDB pool
+  run 8080 (app $ AppConfig { pool = pool })
 
-app :: Database -> Application
+app :: AppConfig -> Application
 app db = serve api $ hoistServer api (readerToHandler db) server
+
+type API = "users" :> (
+                        Get '[JSON] [User]
+                   :<|> ReqBody '[JSON] CreateUser :> Post '[JSON] User
+                   :<|> Capture "userId" Int :> (
+                          Get '[JSON] User
+                     :<|> "transactions" :> Get '[JSON] [Transaction]
+                          )
+                  )
+      :<|> "transactions" :> (
+            Get '[JSON] [Transaction]
+       :<|> ReqBody '[JSON] AddTransaction :> Post '[JSON] Transaction
+      )
 
 api :: Proxy API
 api = Proxy
 
-readerToHandler :: Database -> ReaderT Database Handler a -> Handler a
+readerToHandler :: AppConfig -> ReaderT AppConfig Handler a -> Handler a
 readerToHandler db r = runReaderT r db
 
-server :: ServerT API (ReaderT Database Handler)
-server = listUsers
+server :: ServerT API (ReaderT AppConfig Handler)
+server = (listUsers
   :<|> createUser
-  -- :<|> (\userId ->
-  --         getUser userId
-  --         :<|> updateUser userId
-  --       )
-  where
-    createUser :: CreateUser -> ReaderT Database Handler User
-    createUser CreateUser{ firstName, lastName } = do
-      Database{ pool } <- ask
-      res :: [Only Int] <- liftIO $ withResource pool $ \conn -> query conn "INSERT INTO users (firstName, lastName) VALUES (?, ?) RETURNING userId" (firstName, lastName)
-      case res of
-        [Only userId] -> return $ User { userId = userId
-                      , userLastName = lastName
+  :<|> (\userId ->
+          showUser userId
+     :<|> showUserTransactions userId
+  ))
+  :<|> (
+         listTransactions
+    :<|> addTransaction
+    )
+transactionFromTuple :: (Int, Int, Int, Int, LocalTimestamp) -> Transaction
+transactionFromTuple (transactionId, fromUserId, toUserId, amount, date) =
+      Transaction { transactionId = transactionId
+                  , fromUserId = fromUserId
+                  , toUserId = toUserId
+                  , amount = amount
+                  , date = show date
+                  }
+
+showUserTransactions :: Int -> ReaderT AppConfig Handler [Transaction]
+showUserTransactions userId = do
+  AppConfig{ pool } <- ask
+  res :: [(Int, Int, Int, Int, LocalTimestamp)] <- liftIO $ withResource pool (\conn ->
+    query conn "SELECT transactionId, fromUserId, toUserId, amount, date FROM transactions WHERE fromUserId=? OR toUserId=?"
+      (userId, userId))
+  return $ map transactionFromTuple res
+
+addTransaction :: AddTransaction -> ReaderT AppConfig Handler Transaction
+addTransaction AddTransaction{ fromUserId, toUserId, amount }= do
+  AppConfig{ pool } <- ask
+  res :: [(Int, LocalTimestamp)] <- liftIO $ withResource pool (\conn ->
+    query conn "INSERT INTO transactions (fromUserId, toUserId, amount) VALUES (?, ?, ?) RETURNING transactionId, date"
+      (fromUserId, toUserId, amount))
+  case res of
+    [(transactionId, date)] ->
+      return Transaction { transactionId = transactionId
+                         , fromUserId = fromUserId
+                         , toUserId = toUserId
+                         , amount = amount
+                         , date = show date
+                         }
+    _ -> error "Transaction failed"
+
+
+
+listTransactions :: ReaderT AppConfig Handler [Transaction]
+listTransactions = do
+  AppConfig{ pool } <- ask
+  res :: [(Int, Int, Int, Int, LocalTimestamp)] <- liftIO $ withResource pool (\conn ->
+    query conn "SELECT * FROM transactions" ())
+  return $ map transactionFromTuple res
+
+
+showUser :: Int -> ReaderT AppConfig Handler User
+showUser userId = do
+    AppConfig{ pool } <- ask
+    res :: [(Int, String, String)] <- liftIO $ withResource pool (\conn -> query conn "SELECT * FROM users WHERE userId=? LIMIT 1" (Only userId))
+    case res of
+      [(_,firstName, lastName)] ->
+        return $ User { userId = userId
                       , userFirstName = firstName
+                      , userLastName = lastName
                       }
-        _ -> error "asd"
+      _ -> error "User not found."
 
 
-listUsers :: ReaderT Database Handler [User]
+createUser :: CreateUser -> ReaderT AppConfig Handler User
+createUser CreateUser{ firstName, lastName } = do
+  AppConfig{ pool } <- ask
+  res :: [Only Int] <- liftIO $ withResource pool $ \conn -> query conn "INSERT INTO users (firstName, lastName) VALUES (?, ?) RETURNING userId" (firstName, lastName)
+  case res of
+    [Only userId] -> return $ User { userId = userId
+                  , userLastName = lastName
+                  , userFirstName = firstName
+                  }
+    _ -> error "IDK what happened."
+
+listUsers :: ReaderT AppConfig Handler [User]
 listUsers = do
-  Database{ pool } <- ask
+  AppConfig{ pool } <- ask
   res :: [(Int, String, String)] <- liftIO $ withResource pool $ \conn -> query conn "SELECT * FROM users" ()
   return $ map (\(userId, firstName, lastName) -> User { userId = userId, userFirstName = firstName, userLastName = lastName }) res
 

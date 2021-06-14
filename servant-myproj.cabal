@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.34.4.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 47720b947ec6ee236aa7112941d90cba37bce16b2d53bee095335730518f1b1d
+-- hash: f126c1df0780eca998991e42ee2dd44abc2a30cc91631ef1251ea183035ea07e
 
 name:           servant-myproj
 version:        0.1.0.0
@@ -31,17 +31,22 @@ library
       Paths_servant_myproj
   hs-source-dirs:
       src
-  default-extensions: LambdaCase OverloadedStrings
+  default-extensions:
+      LambdaCase
+      OverloadedStrings
   ghc-options: -Wall -Werror
   build-depends:
       aeson
     , base >=4.7 && <5
     , bytestring
+    , dotenv
     , mtl
     , postgresql-simple
     , resource-pool
     , servant
     , servant-server
+    , text
+    , time
     , transformers
     , wai
     , warp
@@ -53,18 +58,23 @@ executable servant-myproj-exe
       Paths_servant_myproj
   hs-source-dirs:
       app
-  default-extensions: LambdaCase OverloadedStrings
+  default-extensions:
+      LambdaCase
+      OverloadedStrings
   ghc-options: -Wall -Werror -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
     , base
     , bytestring
+    , dotenv
     , mtl
     , postgresql-simple
     , resource-pool
     , servant
     , servant-myproj
     , servant-server
+    , text
+    , time
     , transformers
     , wai
     , warp
@@ -77,12 +87,15 @@ test-suite servant-myproj-test
       Paths_servant_myproj
   hs-source-dirs:
       test
-  default-extensions: LambdaCase OverloadedStrings
+  default-extensions:
+      LambdaCase
+      OverloadedStrings
   ghc-options: -Wall -Werror -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
     , base
     , bytestring
+    , dotenv
     , hspec
     , hspec-wai
     , hspec-wai-json
@@ -92,6 +105,8 @@ test-suite servant-myproj-test
     , servant
     , servant-myproj
     , servant-server
+    , text
+    , time
     , transformers
     , wai
     , warp

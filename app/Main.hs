@@ -1,6 +1,24 @@
 module Main where
 
-import Lib
+import           Configuration.Dotenv       (defaultConfig, loadFile)
+import           Control.Monad              (void)
+import           Database.PostgreSQL.Simple (ConnectInfo (..))
+import           GHC.Word                   (Word16)
+import           Lib                        (startApp)
+import           System.Environment         (getEnv, lookupEnv)
 
 main :: IO ()
-main = startApp
+main = do
+  void $ loadFile defaultConfig
+  dbHost <- getEnv "PGHOST"
+  dbPort <- maybe 5432 (\s -> read s :: Word16)
+                <$> lookupEnv "PGPORT"
+  dbName <- getEnv "PGDATABASE"
+  dbUser <- getEnv "PGUSER"
+  dbPassword <- getEnv "PGPASSWORD"
+  startApp (ConnectInfo{ connectHost = dbHost
+                      , connectDatabase = dbName
+                      , connectPort = dbPort
+                      , connectUser = dbUser
+                      , connectPassword = dbPassword
+                      })
