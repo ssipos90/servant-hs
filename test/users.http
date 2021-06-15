@@ -23,7 +23,8 @@ Content-Type: application/json; charset=utf-8
 Accept: application/json
 
 {
-  "fromUserId": 1,
-  "toUserId": 2,
-  "amount": 123
+  "fromUserId": 2,
+  "toUserId": 1,
+  "amount": -100,
+  "account": "Liability"
 }

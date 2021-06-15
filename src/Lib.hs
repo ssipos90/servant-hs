@@ -1,6 +1,8 @@
 {-# LANGUAGE DataKinds             #-}
+{-# LANGUAGE DeriveAnyClass        #-}
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
@@ -9,33 +11,41 @@
 module Lib
     ( startApp
     ) where
-import           Control.Monad.Reader             (MonadIO (liftIO),
-                                                   ReaderT (..), ask,
-                                                   runReaderT)
+import           Control.Monad.Reader                 (MonadIO (liftIO),
+                                                       ReaderT (..), ask,
+                                                       runReaderT)
 
-import           Data.Aeson                       (FromJSON, ToJSON (toJSON),
-                                                   defaultOptions,
-                                                   object, (.=))
-import Data.Aeson.TH(deriveJSON) 
-import qualified Data.ByteString                  as BS
-import           Data.Pool                        (Pool (..), createPool,
-                                                   withResource)
-import           Data.Text.Encoding               (decodeUtf8)
-import qualified Data.Text.IO                     as TIO
-import           Database.PostgreSQL.Simple.Time       (LocalTimestamp)
-import           Database.PostgreSQL.Simple       (ConnectInfo, Connection,
-                                                   Only (Only), close, connect,
-                                                   execute_, query)
-import           Database.PostgreSQL.Simple.Types (Query (..))
-import           GHC.Generics                     (Generic (..))
+import           Data.Aeson                           (FromJSON (parseJSON),
+                                                       ToJSON (toJSON),
+                                                       Value (String),
+                                                       defaultOptions, object,
+                                                       withText, (.=))
+import           Data.Aeson.TH                        (deriveJSON)
+import           Data.ByteString.Char8                (pack)
+import           Data.Pool                            (Pool (..), createPool,
+                                                       withResource)
+import qualified Data.Text                            as T
+import           Data.Text.Encoding                   (decodeUtf8)
+import           Database.PostgreSQL.Simple           (ConnectInfo, Connection,
+                                                       FromRow, In (In),
+                                                       Only (Only), close,
+                                                       connect, query)
+import           Database.PostgreSQL.Simple.FromField (FromField (..),
+                                                       ResultError (..),
+                                                       returnError)
+import           Database.PostgreSQL.Simple.Time      (LocalTimestamp)
+import           Database.PostgreSQL.Simple.ToField   (Action (..),
+                                                       ToField (..))
+import           GHC.Generics                         (Generic (..))
 import           Network.Wai
 import           Network.Wai.Handler.Warp
-import           Servant                          (Capture, Handler,
-                                                   HasServer (ServerT),
-                                                   Proxy (..), ServerT,
-                                                   hoistServer, serve)
-import           Servant.API                      (Get, JSON, Post, ReqBody,
-                                                   (:<|>) (..), (:>))
+import           Servant                              (Capture, Handler,
+                                                       HasServer (ServerT),
+                                                       Proxy (..), QueryParams,
+                                                       ServerT, hoistServer,
+                                                       serve)
+import           Servant.API                          (Get, JSON, Post, ReqBody,
+                                                       (:<|>) (..), (:>))
 
 data User = User
   { userId        :: Int
@@ -44,12 +54,25 @@ data User = User
   } deriving (Show)
 
 instance Eq User where
-  User {userId = userId1}== User {userId = userId2} = userId1 == userId2
+  User {userId = userId1} == User {userId = userId2} = userId1 == userId2
 
 data CreateUser = CreateUser
   { firstName :: String
   , lastName  :: String
   } deriving (Show, Generic)
+
+data Account = Liability | Expense deriving (Show, Eq)
+
+instance FromField Account where
+  fromField f mData = case mData of
+                        Just d -> case decodeUtf8 d of
+                          "Liability" -> return Liability
+                          "Expense" -> return Expense
+                          s -> returnError ConversionFailed f $ T.unpack s
+                        Nothing -> returnError Incompatible f ""
+
+instance ToField Account where
+  toField = Escape . pack . show
 
 data Transaction = Transaction
   { transactionId :: Int
@@ -57,15 +80,27 @@ data Transaction = Transaction
   , toUserId      :: Int
   , amount        :: Int
   , date          :: String
-  } deriving (Show, Generic)
+  , account       :: Account
+  -- TODO: storno
+  } deriving (Show, Generic, FromRow)
 
 data AddTransaction = AddTransaction
   { fromUserId :: Int
   , toUserId   :: Int
   , amount     :: Int
+  , account    :: Account
   } deriving (Generic)
 
 instance FromJSON CreateUser
+
+instance FromJSON Account where
+  parseJSON = withText "Account" $ \case
+      "Liability" -> return Liability
+      "Expense"   -> return Expense
+      _           -> fail ""
+
+instance ToJSON Account where
+  toJSON = String . T.pack . show
 
 instance FromJSON AddTransaction
 
@@ -78,37 +113,36 @@ instance ToJSON User where
 
 $(deriveJSON defaultOptions ''Transaction)
 
-createUsersQuery :: BS.ByteString
-createUsersQuery = "CREATE TABLE IF NOT EXISTS users\
-    \( userId INT GENERATED BY DEFAULT AS IDENTITY\
-    \, firstName VARCHAR NOT NULL\
-    \, lastName VARCHAR NOT NULL\
-    \, PRIMARY KEY(userId)\
-    \)"
+{-
+  CREATE TABLE IF NOT EXISTS users
+  ( userId INT GENERATED BY DEFAULT AS IDENTITY
+  , firstName VARCHAR NOT NULL
+  , lastName VARCHAR NOT NULL
+  , PRIMARY KEY(userId)
+  );
+  
+  CREATE TYPE account AS ENUM ('Liability', 'Expense');
+  
+  CREATE TABLE IF NOT EXISTS transactions
+  ( transactionId INT GENERATED BY DEFAULT AS IDENTITY
+  , fromUserId INT NOT NULL
+  , toUserId INT NOT NULL
+  , amount INT NOT NULL
+  , account account NOT NULL
+  , date TIMESTAMP NOT NULL DEFAULT now()
+  , PRIMARY KEY(transactionId)
+  , CONSTRAINT fk_from_user
+     FOREIGN KEY(fromUserId)
+       REFERENCES users(userId)
+  , CONSTRAINT fk_to_user
+     FOREIGN KEY(toUserId)
+       REFERENCES users(userId)
+  );
 
-createTransactionsQuery :: BS.ByteString
-createTransactionsQuery = "CREATE TABLE IF NOT EXISTS transactions \
-    \( transactionId INT GENERATED BY DEFAULT AS IDENTITY\
-    \, fromUserId INT NOT NULL\
-    \, toUserId INT NOT NULL\
-    \, amount INT NOT NULL\
-    \, date TIMESTAMP NOT NULL DEFAULT now()\
-    \, PRIMARY KEY(transactionId)\
-    \, CONSTRAINT fk_from_user\
-      \ FOREIGN KEY(fromUserId)\
-        \ REFERENCES users(userId)\
-    \, CONSTRAINT fk_to_user\
-      \ FOREIGN KEY(toUserId)\
-        \ REFERENCES users(userId)\
-    \)"
-
-initDB :: Pool Connection -> IO ()
-initDB pool = withResource pool $ \conn -> do
-  _ <- TIO.putStrLn $ decodeUtf8 createUsersQuery
-  _ <- execute_ conn $ Query createUsersQuery
-  _ <- TIO.putStrLn $ decodeUtf8 createTransactionsQuery
-  _ <- execute_ conn $ Query createTransactionsQuery
-  return ()
+  CREATE INDEX IF NOT EXISTS transaction_account_idx
+  ON transactions
+  (account);
+-}
 
 data AppConfig = AppConfig {
   pool :: Pool Connection
@@ -122,33 +156,38 @@ initConnectionPool connInfo =
              60 -- unused connections are kept open for a minute
              10 -- max. 10 connections open per stripe
 
+
 startApp :: ConnectInfo -> IO ()
 startApp connInfo = do
   pool <- initConnectionPool connInfo
-  initDB pool
   run 8080 (app $ AppConfig { pool = pool })
 
 app :: AppConfig -> Application
 app db = serve api $ hoistServer api (readerToHandler db) server
 
-type API = "users" :> (
-                        Get '[JSON] [User]
-                   :<|> ReqBody '[JSON] CreateUser :> Post '[JSON] User
-                   :<|> Capture "userId" Int :> (
-                          Get '[JSON] User
-                     :<|> "transactions" :> Get '[JSON] [Transaction]
-                          )
-                  )
-      :<|> "transactions" :> (
-            Get '[JSON] [Transaction]
-       :<|> ReqBody '[JSON] AddTransaction :> Post '[JSON] Transaction
-      )
+
+type API =
+          "users" :> (
+              Get '[JSON] [User]
+          :<|> ReqBody '[JSON] CreateUser :> Post '[JSON] User
+          :<|> Capture "userId" Int :> (
+                Get '[JSON] User
+            :<|> "transactions" :> QueryParams"accounts" String :> Get '[JSON] [Transaction]
+                )
+        )
+     :<|> "transactions" :> (
+                Get '[JSON] [Transaction]
+           :<|> ReqBody '[JSON] AddTransaction :> Post '[JSON] Transaction
+          )
+
 
 api :: Proxy API
 api = Proxy
 
+
 readerToHandler :: AppConfig -> ReaderT AppConfig Handler a -> Handler a
 readerToHandler db r = runReaderT r db
+
 
 server :: ServerT API (ReaderT AppConfig Handler)
 server = (listUsers
@@ -161,48 +200,51 @@ server = (listUsers
          listTransactions
     :<|> addTransaction
     )
-transactionFromTuple :: (Int, Int, Int, Int, LocalTimestamp) -> Transaction
-transactionFromTuple (transactionId, fromUserId, toUserId, amount, date) =
-      Transaction { transactionId = transactionId
-                  , fromUserId = fromUserId
-                  , toUserId = toUserId
-                  , amount = amount
-                  , date = show date
-                  }
 
-showUserTransactions :: Int -> ReaderT AppConfig Handler [Transaction]
-showUserTransactions userId = do
+showUserTransactions :: Int -> [String] -> ReaderT AppConfig Handler [Transaction]
+showUserTransactions userId accounts = do
   AppConfig{ pool } <- ask
-  res :: [(Int, Int, Int, Int, LocalTimestamp)] <- liftIO $ withResource pool (\conn ->
-    query conn "SELECT transactionId, fromUserId, toUserId, amount, date FROM transactions WHERE fromUserId=? OR toUserId=?"
-      (userId, userId))
-  return $ map transactionFromTuple res
+  res :: [Transaction] <- liftIO $ withResource pool (\conn ->
+      if null accounts then
+        query conn "SELECT transactionId, fromUserId, toUserId, amount, date \
+                  \FROM transactions \
+                  \WHERE fromUserId=? OR toUserId=?"
+          (userId, userId)
+      else
+        query conn "SELECT transactionId, fromUserId, toUserId, amount, date \
+                  \FROM transactions \
+                  \WHERE (fromUserId=? OR toUserId=?) AND account in ?"
+          (userId, userId, In accounts)
+    )
+  return res
+
 
 addTransaction :: AddTransaction -> ReaderT AppConfig Handler Transaction
-addTransaction AddTransaction{ fromUserId, toUserId, amount }= do
+addTransaction AddTransaction{ fromUserId, toUserId, amount, account }= do
   AppConfig{ pool } <- ask
   res :: [(Int, LocalTimestamp)] <- liftIO $ withResource pool (\conn ->
-    query conn "INSERT INTO transactions (fromUserId, toUserId, amount) VALUES (?, ?, ?) RETURNING transactionId, date"
-      (fromUserId, toUserId, amount))
+    query conn "INSERT INTO transactions (fromUserId, toUserId, amount, account) \
+                                 \VALUES (?, ?, ?, ?) \
+                                 \RETURNING transactionId, date"
+      (fromUserId, toUserId, amount, account))
   case res of
     [(transactionId, date)] ->
       return Transaction { transactionId = transactionId
                          , fromUserId = fromUserId
                          , toUserId = toUserId
                          , amount = amount
+                         , account = account
                          , date = show date
                          }
     _ -> error "Transaction failed"
 
 
-
 listTransactions :: ReaderT AppConfig Handler [Transaction]
 listTransactions = do
   AppConfig{ pool } <- ask
-  res :: [(Int, Int, Int, Int, LocalTimestamp)] <- liftIO $ withResource pool (\conn ->
+  res :: [Transaction] <- liftIO $ withResource pool (\conn ->
     query conn "SELECT * FROM transactions" ())
-  return $ map transactionFromTuple res
-
+  return res
 
 showUser :: Int -> ReaderT AppConfig Handler User
 showUser userId = do
@@ -228,11 +270,15 @@ createUser CreateUser{ firstName, lastName } = do
                   }
     _ -> error "IDK what happened."
 
+
 listUsers :: ReaderT AppConfig Handler [User]
 listUsers = do
   AppConfig{ pool } <- ask
-  res :: [(Int, String, String)] <- liftIO $ withResource pool $ \conn -> query conn "SELECT * FROM users" ()
-  return $ map (\(userId, firstName, lastName) -> User { userId = userId, userFirstName = firstName, userLastName = lastName }) res
+  res :: [(Int, String, String)] <- liftIO $ withResource pool $ \conn ->
+    query conn "SELECT * FROM users" ()
+  return $ map (\(userId, firstName, lastName) ->
+    User { userId = userId, userFirstName = firstName, userLastName = lastName }) res
+
 
 -- getUser :: Int -> Handler User
 -- getUser = undefined
