@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f126c1df0780eca998991e42ee2dd44abc2a30cc91631ef1251ea183035ea07e
+-- hash: 261bd9d86ae34a8a9f6bee8fe0caa71980b6e963fedf1ac32ef0fd822c3ab6d5
 
 name:           servant-myproj
 version:        0.1.0.0
@@ -26,7 +26,7 @@ source-repository head
 
 library
   exposed-modules:
-      Lib
+      SmallAccounts
   other-modules:
       Paths_servant_myproj
   hs-source-dirs:
